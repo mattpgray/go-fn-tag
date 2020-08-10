@@ -42,7 +42,7 @@ func main() {
 					if fn, isFn := d.(*ast.FuncDecl); isFn {
 						node, tag, ok := getFnTag( fn )
 						if ok {
-							funcs = append( funcs, fnTag{ tag:tag, node: node, pkg: pkg, file: file, fn: fn.Name.Name } )
+							funcs = append( funcs, fnTag{ tag:tag, node: node, pkg: pack.Name, file: file, fn: fn.Name.Name } )
 						}
 
 					}
