@@ -26,17 +26,18 @@ func (t *fnTag) expected() string {
 	extension := filepath.Ext(fileName)
 	fileName = fileName[0 : len(fileName)-len(extension)]
 	return fmt.Sprintf("%s.%s.%s", t.pkg, fileName, t.fn)
-} // expected
+}
 
 func main() {
-	if len(os.Args) < 2 {
+	write := flag.Bool("w", false, "Rewrite the files with correct fn tags")
+	flag.Parse()
+
+	if len(flag.Args()) < 1 {
 		fmt.Println("Usage fns <package>")
 		os.Exit(1)
 	}
 
-	write := flag.Bool("w", false, "Rewrite the files with correct fn tags")
-
-	pkg := os.Args[1]
+	pkg := flag.Args()[0]
 
 	set := token.NewFileSet()
 	packs, err := parser.ParseDir(set, pkg, nil, 0)
@@ -54,10 +55,9 @@ func main() {
 					fnt := fnTag{tag: tag, node: node, pkg: pack.Name, file: file, fn: fn.Name.Name}
 					if ok {
 						funcs = append(funcs, fnt)
-					}
-
-					if *write {
-						val.Value = `"` + fnt.expected() + `"`
+						if *write {
+							val.Value = `"` + fnt.expected() + `"`
+						}
 					}
 
 				}
@@ -81,29 +81,32 @@ func main() {
 				newFile, err := os.Create(newFName)
 				if err != nil {
 					log.Fatalf("Error creating file %q", err)
-				} // if
+				}
 
 				err = format.Node(newFile, set, f)
 				if err != nil {
 					log.Fatalf("Error writing to file %q", err)
-				} // if
+				}
 
-				// Move files around
+				err = newFile.Close()
+				if err != nil {
+					log.Fatalf("Error closing file %q", err)
+				}
+
 				err = os.Rename(file, oldFName)
 				if err != nil {
 					log.Fatalf("Error renaming old file %q", err)
-				} // if
+				}
 
 				err = os.Rename(newFName, file)
 				if err != nil {
 					log.Fatalf("Error renaming new file %q", err)
-				} // if
+				}
 
-				// Finally remove old file
 				err = os.Remove(oldFName)
 				if err != nil {
 					log.Fatalf("Error deleting new file %q", err)
-				} // if
+				}
 			}
 		}
 	}
