@@ -1,10 +1,13 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,11 +21,20 @@ type fnTag struct {
 	fn   string
 }
 
+func (t *fnTag) expected() string {
+	fileName := filepath.Base(t.file)
+	extension := filepath.Ext(fileName)
+	fileName = fileName[0 : len(fileName)-len(extension)]
+	return fmt.Sprintf("%s.%s.%s", t.pkg, fileName, t.fn)
+} // expected
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage fns <package>")
 		os.Exit(1)
 	}
+
+	write := flag.Bool("w", false, "Rewrite the files with correct fn tags")
 
 	pkg := os.Args[1]
 
@@ -38,9 +50,14 @@ func main() {
 		for file, f := range pack.Files {
 			for _, d := range f.Decls {
 				if fn, isFn := d.(*ast.FuncDecl); isFn {
-					node, tag, ok := getFnTag(fn)
+					node, val, tag, ok := getFnTag(fn)
+					fnt := fnTag{tag: tag, node: node, pkg: pack.Name, file: file, fn: fn.Name.Name}
 					if ok {
-						funcs = append(funcs, fnTag{tag: tag, node: node, pkg: pack.Name, file: file, fn: fn.Name.Name})
+						funcs = append(funcs, fnt)
+					}
+
+					if *write {
+						val.Value = `"` + fnt.expected() + `"`
 					}
 
 				}
@@ -49,17 +66,50 @@ func main() {
 	}
 
 	for _, fn := range funcs {
-		fileName := filepath.Base(fn.file)
-		extension := filepath.Ext(fileName)
-		fileName = fileName[0 : len(fileName)-len(extension)]
-		correct := fmt.Sprintf("%s.%s.%s", fn.pkg, fileName, fn.fn)
-		if fn.tag != correct {
-			fmt.Printf("%s:%d Incorrect fn tag %q. Should be %q\n", fn.file, set.Position(fn.node.Pos()).Line, fn.tag, correct)
+		if fn.tag != fn.expected() {
+			fmt.Printf("%s:%d Incorrect fn tag %q. Should be %q\n", fn.file, set.Position(fn.node.Pos()).Line, fn.tag, fn.expected())
+		}
+	}
+
+	if *write {
+		for _, pack := range packs {
+			for file, f := range pack.Files {
+				var (
+					newFName = file + ".new"
+					oldFName = file + ".old"
+				)
+				newFile, err := os.Create(newFName)
+				if err != nil {
+					log.Fatalf("Error creating file %q", err)
+				} // if
+
+				err = format.Node(newFile, set, f)
+				if err != nil {
+					log.Fatalf("Error writing to file %q", err)
+				} // if
+
+				// Move files around
+				err = os.Rename(file, oldFName)
+				if err != nil {
+					log.Fatalf("Error renaming old file %q", err)
+				} // if
+
+				err = os.Rename(newFName, file)
+				if err != nil {
+					log.Fatalf("Error renaming new file %q", err)
+				} // if
+
+				// Finally remove old file
+				err = os.Remove(oldFName)
+				if err != nil {
+					log.Fatalf("Error deleting new file %q", err)
+				} // if
+			}
 		}
 	}
 }
 
-func getFnTag(fn *ast.FuncDecl) (*ast.Ident, string, bool) {
+func getFnTag(fn *ast.FuncDecl) (*ast.Ident, *ast.BasicLit, string, bool) {
 	block := fn.Body
 	for _, stmt := range block.List {
 		ass, ok := stmt.(*ast.AssignStmt)
@@ -82,8 +132,8 @@ func getFnTag(fn *ast.FuncDecl) (*ast.Ident, string, bool) {
 				continue
 			}
 
-			return variable, strings.Trim(val.Value, `"`), true
+			return variable, val, strings.Trim(val.Value, `"`), true
 		}
 	}
-	return nil, "", false
+	return nil, nil, "", false
 }
