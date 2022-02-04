@@ -14,18 +14,41 @@ import (
 )
 
 type fnTag struct {
-	tag  string
-	node *ast.Ident
-	pkg  string
-	file string
-	fn   string
+	tag        string
+	node       *ast.Ident
+	valNode    *ast.BasicLit
+	pkg        string
+	file       string
+	fn         string
+	methodType string
 }
 
-func (t *fnTag) expected() string {
+func (t *fnTag) oldStyle() string {
 	fileName := filepath.Base(t.file)
 	extension := filepath.Ext(fileName)
 	fileName = fileName[0 : len(fileName)-len(extension)]
 	return fmt.Sprintf("%s.%s.%s", t.pkg, fileName, t.fn)
+}
+
+func (t *fnTag) newStyle() string {
+	if t.methodType == "" {
+		return t.oldStyle()
+	}
+	fileName := filepath.Base(t.file)
+	extension := filepath.Ext(fileName)
+	fileName = fileName[0 : len(fileName)-len(extension)]
+	return fmt.Sprintf("%s.%s.%s-%s", t.pkg, fileName, t.methodType, t.fn)
+}
+
+func (t *fnTag) needsReplacing(tag string) (replacement string) {
+	if tag == t.oldStyle() {
+		return ""
+	}
+	n := t.newStyle()
+	if tag == n {
+		return ""
+	}
+	return n
 }
 
 func main() {
@@ -52,12 +75,24 @@ func main() {
 			for _, d := range f.Decls {
 				if fn, isFn := d.(*ast.FuncDecl); isFn {
 					node, val, tag, ok := getFnTag(fn)
-					fnt := fnTag{tag: tag, node: node, pkg: pack.Name, file: file, fn: fn.Name.Name}
+					fnt := fnTag{tag: tag, node: node, pkg: pack.Name, valNode: val, file: file, fn: fn.Name.Name}
 					if ok {
-						funcs = append(funcs, fnt)
-						if *write {
-							val.Value = `"` + fnt.expected() + `"`
+						if fn.Recv != nil {
+							if len(fn.Recv.List) != 1 {
+								fmt.Fprintf(os.Stderr, "Method found with more than one receiver")
+								os.Exit(1)
+							} // if
+							switch tt := fn.Recv.List[0].Type.(type) {
+							case *ast.Ident:
+								fnt.methodType = tt.Name
+							case *ast.StarExpr:
+								fnt.methodType = "*" + tt.X.(*ast.Ident).Name
+							default:
+								fmt.Fprintf(os.Stderr, "Invalid receiver type %T", tt)
+								os.Exit(1)
+							}
 						}
+						funcs = append(funcs, fnt)
 					}
 
 				}
@@ -66,8 +101,11 @@ func main() {
 	}
 
 	for _, fn := range funcs {
-		if fn.tag != fn.expected() {
-			fmt.Printf("%s:%d Incorrect fn tag %q. Should be %q\n", fn.file, set.Position(fn.node.Pos()).Line, fn.tag, fn.expected())
+		if r := fn.needsReplacing(fn.tag); r != "" {
+			fmt.Printf("%s:%d Incorrect fn tag %q. Should be %q\n", fn.file, set.Position(fn.node.Pos()).Line, fn.tag, r)
+			if *write {
+				fn.valNode.Value = `"` + r + `"`
+			}
 		}
 	}
 
