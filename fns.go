@@ -40,7 +40,7 @@ func main() {
 	pkg := flag.Args()[0]
 
 	set := token.NewFileSet()
-	packs, err := parser.ParseDir(set, pkg, nil, 0)
+	packs, err := parser.ParseDir(set, pkg, nil, parser.ParseComments)
 	if err != nil {
 		fmt.Println("Failed to parse package:", err)
 		os.Exit(1)
