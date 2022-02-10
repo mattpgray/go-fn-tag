@@ -51,6 +51,14 @@ func (t *fnTag) needsReplacing(tag string) (replacement string) {
 	return n
 }
 
+func cleanPath(path string) string {
+	cln := filepath.Clean(path)
+	if filepath.IsAbs(path) || strings.HasPrefix(cln, ".") {
+		return cln
+	}
+	return "." + string(os.PathSeparator) + cln
+}
+
 func main() {
 	write := flag.Bool("w", false, "Rewrite the files with correct fn tags")
 	flag.Parse()
@@ -62,40 +70,66 @@ func main() {
 
 	pkg := flag.Args()[0]
 
+	// TODO: allow ./... format
 	set := token.NewFileSet()
-	packs, err := parser.ParseDir(set, pkg, nil, parser.ParseComments)
+	stat, err := os.Stat(pkg)
 	if err != nil {
-		fmt.Println("Failed to parse package:", err)
+		fmt.Println("Failed to stat file or dir:", err)
 		os.Exit(1)
+	}
+	type file struct {
+		name string
+		file *ast.File
+	}
+	var files []file
+	switch {
+	case stat.IsDir():
+		packs, err := parser.ParseDir(set, pkg, nil, parser.ParseComments)
+		if err != nil {
+			fmt.Println("Failed to parse package:", err)
+			os.Exit(1)
+		}
+		for _, pack := range packs {
+			for name, f := range pack.Files {
+				files = append(files, file{cleanPath(name), f})
+			}
+		}
+	default:
+		// TODO: glob?
+		f, err := parser.ParseFile(set, pkg, nil, parser.ParseComments)
+		if err != nil {
+			fmt.Println("Failed to parse file:", err)
+			os.Exit(1)
+		}
+		files = []file{{cleanPath(pkg), f}}
 	}
 
 	funcs := []fnTag{}
-	for _, pack := range packs {
-		for file, f := range pack.Files {
-			for _, d := range f.Decls {
-				if fn, isFn := d.(*ast.FuncDecl); isFn {
-					node, val, tag, ok := getFnTag(fn)
-					fnt := fnTag{tag: tag, node: node, pkg: pack.Name, valNode: val, file: file, fn: fn.Name.Name}
-					if ok {
-						if fn.Recv != nil {
-							if len(fn.Recv.List) != 1 {
-								fmt.Fprintf(os.Stderr, "Method found with more than one receiver")
-								os.Exit(1)
-							} // if
-							switch tt := fn.Recv.List[0].Type.(type) {
-							case *ast.Ident:
-								fnt.methodType = tt.Name
-							case *ast.StarExpr:
-								fnt.methodType = "*" + tt.X.(*ast.Ident).Name
-							default:
-								fmt.Fprintf(os.Stderr, "Invalid receiver type %T", tt)
-								os.Exit(1)
-							}
-						}
-						funcs = append(funcs, fnt)
-					}
+	for _, f := range files {
 
+		for _, d := range f.file.Decls {
+			if fn, isFn := d.(*ast.FuncDecl); isFn {
+				node, val, tag, ok := getFnTag(fn)
+				fnt := fnTag{tag: tag, node: node, pkg: f.file.Name.Name, valNode: val, file: f.name, fn: fn.Name.Name}
+				if ok {
+					if fn.Recv != nil {
+						if len(fn.Recv.List) != 1 {
+							fmt.Fprintf(os.Stderr, "Method found with more than one receiver")
+							os.Exit(1)
+						} // if
+						switch tt := fn.Recv.List[0].Type.(type) {
+						case *ast.Ident:
+							fnt.methodType = tt.Name
+						case *ast.StarExpr:
+							fnt.methodType = "*" + tt.X.(*ast.Ident).Name
+						default:
+							fmt.Fprintf(os.Stderr, "Invalid receiver type %T", tt)
+							os.Exit(1)
+						}
+					}
+					funcs = append(funcs, fnt)
 				}
+
 			}
 		}
 	}
@@ -110,41 +144,39 @@ func main() {
 	}
 
 	if *write {
-		for _, pack := range packs {
-			for file, f := range pack.Files {
-				var (
-					newFName = file + ".new"
-					oldFName = file + ".old"
-				)
-				newFile, err := os.Create(newFName)
-				if err != nil {
-					log.Fatalf("Error creating file %q", err)
-				}
+		for _, f := range files {
+			var (
+				newFName = f.name + ".new"
+				oldFName = f.name + ".old"
+			)
+			newFile, err := os.Create(newFName)
+			if err != nil {
+				log.Fatalf("Error creating file %q", err)
+			}
 
-				err = format.Node(newFile, set, f)
-				if err != nil {
-					log.Fatalf("Error writing to file %q", err)
-				}
+			err = format.Node(newFile, set, f)
+			if err != nil {
+				log.Fatalf("Error writing to file %q", err)
+			}
 
-				err = newFile.Close()
-				if err != nil {
-					log.Fatalf("Error closing file %q", err)
-				}
+			err = newFile.Close()
+			if err != nil {
+				log.Fatalf("Error closing file %q", err)
+			}
 
-				err = os.Rename(file, oldFName)
-				if err != nil {
-					log.Fatalf("Error renaming old file %q", err)
-				}
+			err = os.Rename(f.name, oldFName)
+			if err != nil {
+				log.Fatalf("Error renaming old file %q", err)
+			}
 
-				err = os.Rename(newFName, file)
-				if err != nil {
-					log.Fatalf("Error renaming new file %q", err)
-				}
+			err = os.Rename(newFName, f.name)
+			if err != nil {
+				log.Fatalf("Error renaming new file %q", err)
+			}
 
-				err = os.Remove(oldFName)
-				if err != nil {
-					log.Fatalf("Error deleting new file %q", err)
-				}
+			err = os.Remove(oldFName)
+			if err != nil {
+				log.Fatalf("Error deleting new file %q", err)
 			}
 		}
 	}
