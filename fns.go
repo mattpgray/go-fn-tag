@@ -154,7 +154,7 @@ func main() {
 				log.Fatalf("Error creating file %q", err)
 			}
 
-			err = format.Node(newFile, set, f)
+			err = format.Node(newFile, set, f.file)
 			if err != nil {
 				log.Fatalf("Error writing to file %q", err)
 			}
